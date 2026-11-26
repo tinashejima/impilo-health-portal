@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
-<head><script src="./auth.js?v=3"></script>
+<head><script src="config.js"></script>
+<script src="./auth.js?v=3"></script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>National Health Dashboard</title>
@@ -190,7 +191,7 @@ const DISTRICTS=[{"name":"Beitbridge","d":"M437.3,527.3L436.3,526.7L436.3,524.2L
 // Same projection as the portal map: longitude/latitude to the 600 x 552 map space.
 const K=81.05493754657579;
 const project=(lon,lat)=>[(lon-25.237597177423254)*.9454384408440947*K,(-15.60714602564883-lat)*K];
-const API='http://127.0.0.1:8765/api';
+const API=(window.IMPILO_API_ORIGIN||"http://127.0.0.1:8765")+'/api';
 const $=id=>document.getElementById(id);
 const fmt=n=>n==null?'—':Number(n).toLocaleString('en-GB');
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));

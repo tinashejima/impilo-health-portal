@@ -6,7 +6,7 @@
  */
 (function () {
   'use strict';
-  var API = 'http://127.0.0.1:8765';
+  var API = (window.IMPILO_API_ORIGIN||"http://127.0.0.1:8765")+'';
   var KEY = 'impilo.auth.v1';
   var SIGNIN = 'signin.html';
   var isSignin = /signin\.html$/.test(location.pathname);
