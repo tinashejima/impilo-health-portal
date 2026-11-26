@@ -75,7 +75,7 @@ input:focus{outline:none;border-color:var(--green);box-shadow:0 0 0 3px rgba(33,
 <script>
 const API_DOWN_MSG=(()=>{const h=location.hostname;return(h==='127.0.0.1'||h==='localhost'||h==='')
   ?'The portal API is not running. Start it with start.cmd, then reload this page.'
-  :'The portal API can't be reached. The server PC must be running start.cmd and tunnel.cmd, and the site must be redeployed after tunnel.cmd gives a new address.'})();
+  :'The portal API cannot be reached. The server PC must be running start.cmd and tunnel.cmd, and the site must be redeployed after tunnel.cmd gives a new address.'})();
 const API=ImpiloAuth.api+'/api/auth';
 const $=id=>document.getElementById(id);
 const params=new URLSearchParams(location.search);
