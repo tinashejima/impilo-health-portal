@@ -1,6 +1,6 @@
 . (Join-Path $PSScriptRoot 'common.ps1')
 
-foreach ($name in @('web', 'api')) {
+foreach ($name in @('tunnel', 'web', 'api')) {
     $pidFile = Join-Path $RunDir "$name.pid"
     if (Test-Path $pidFile) {
         $procId = [int](Get-Content $pidFile | Select-Object -First 1)
