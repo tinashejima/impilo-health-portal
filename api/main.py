@@ -25,7 +25,8 @@ app.include_router(auth_router)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8080", "http://127.0.0.1:8080"],
+    allow_origins=["http://localhost:8080", "http://127.0.0.1:8080"]
+    + [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()],
     allow_methods=["GET", "POST", "PUT", "DELETE"],  # POST/PUT/DELETE for the AI assistant
     allow_headers=["*"],
     expose_headers=["Content-Disposition"],  # so downloads keep their file names
