@@ -11,7 +11,7 @@
  */
 (function () {
   'use strict';
-  var API = 'http://127.0.0.1:8765/api';
+  var API = (window.IMPILO_API_ORIGIN||"http://127.0.0.1:8765")+'/api';
   var KEY = 'impilo.filters.v1';
   var DEFAULTS = { province: '', district: '', type: '', facility: '', period: '12', from: '', to: '' };
   var TYPES = [['', 'All facility types'], ['CLINIC', 'Clinics'], ['HOSPITAL', 'All hospitals'],
