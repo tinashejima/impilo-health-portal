@@ -360,14 +360,23 @@ def _registry_row(r):
             'hasData':r['facility_id'] in DATA_FACILITY_IDS}
 
 
+def _ids(v):
+    """Filter values as a list: accepts None, one ID, comma-separated IDs ('PV01,PV02') or a list."""
+    if v is None:return []
+    items=v if isinstance(v,(list,tuple,set)) else str(v).split(',')
+    return list(dict.fromkeys(str(x).strip() for x in items if x is not None and str(x).strip()))
+
+
 def _registry(c,facility_id=None,province=None,district=None,ftype=None,q=None):
+    """Registry facilities matching the filters. Each filter takes one ID or several (comma-separated or a
+    list): several values of one filter match any of them; different filters must all match."""
     where=[];args=[]
-    if facility_id:where.append('r.facility_id=%s');args.append(facility_id)
-    if province:where.append('r.province_id=%s');args.append(province)
-    if district:where.append('r.district_id=%s');args.append(district)
-    if ftype:
-        codes=TYPE_GROUPS.get(ftype.upper(),(ftype.upper(),))
-        where.append('r.facility_type IN ('+','.join(['%s']*len(codes))+')');args+=list(codes)
+    def any_of(col,values):
+        if values:where.append(col+' IN ('+','.join(['%s']*len(values))+')');args.extend(values)
+    any_of('r.facility_id',_ids(facility_id));any_of('r.province_id',_ids(province));any_of('r.district_id',_ids(district))
+    codes=[]
+    for t in _ids(ftype):codes+=[x for x in TYPE_GROUPS.get(t.upper(),(t.upper(),)) if x not in codes]
+    any_of('r.facility_type',codes)
     if q:where.append('r.facility_name LIKE %s');args.append('%'+q.strip()+'%')
     sql=REGISTRY_SQL+(' WHERE '+' AND '.join(where) if where else '')+' ORDER BY p.province_name,d.district_name,r.facility_name'
     return [_registry_row(r) for r in _query(c,sql,args)]
@@ -1566,6 +1575,34 @@ def _indicators(from_date,to_date):
     }
 
 
+# Report types a facility submits. Each registered facility is expected to submit each of them for the period.
+REPORT_TYPES=[('attendance','Attendance'),('opd','OPD General'),('hts','HTS'),('anc','ANC'),('art','ART'),
+              ('tb','TB'),('malaria','Malaria'),('delivery','Delivery')]
+
+
+def _reporting_rate(scope_rows,indicators,report):
+    """Reporting rate = facilities that reported / facilities expected to report, for the period and scope.
+
+    Expected: every registered facility in scope, counted once (one obligation per facility for the
+    selected report type, or for "all report types"). Reported: the facility submitted at least one record
+    of that report type dated inside the period; with all report types, at least one record of any type.
+    A facility with many records still counts once."""
+    # Single-tenant database: the register totals belong to the facilities whose data is loaded.
+    # Multi-tenant: look the totals up per facility_id instead.
+    totals={r['id']:r['total'] for r in indicators['registers']} if indicators else {}
+    def submitted(fid,rid):return fid in DATA_FACILITY_IDS and (totals.get(rid) or 0)>0
+    ids=list(dict.fromkeys(r['id'] for r in scope_rows))  # de-duplicated facility IDs
+    def figures(types):
+        expected=len(ids);reported=sum(1 for fid in ids if any(submitted(fid,t) for t in types))
+        return {'expected':expected,'reported':reported,'notReported':expected-reported,
+                'rate':round(reported/expected*100,1) if expected else None}
+    names=dict(REPORT_TYPES)
+    return {'report':report,'reportLabel':names[report] if report else 'All report types',
+            **figures([report] if report else list(names)),
+            'byReport':[{'id':rid,'name':name,**figures([rid])} for rid,name in REPORT_TYPES],
+            'reportTypes':[{'id':rid,'name':name} for rid,name in REPORT_TYPES]}
+
+
 def _breakdown(rows,key,name_key):
     groups={}
     for r in rows:
@@ -1577,19 +1614,42 @@ def _breakdown(rows,key,name_key):
 
 @app.get('/api/dashboard')
 def national_dashboard(from_date: date | None=Query(None,alias='from'),to_date: date | None=Query(None,alias='to'),
-                       province: str | None=None,district: str | None=None,type: str | None=None,facility: str | None=None):
-    """Dashboard for any scope: national, a province, a district, a facility type, or one facility."""
+                       province: str | None=None,district: str | None=None,type: str | None=None,facility: str | None=None,
+                       report: str | None=None):
+    """Dashboard for any scope: national, provinces, districts, facility types, or facilities.
+    province, district, type and facility each take one ID or several, comma-separated (e.g. province=PV01,PV02).
+    'report' (attendance, opd, hts, anc, art, tb, malaria, delivery) narrows the reporting rate to one report type."""
+    report=(report or '').strip().lower() or None
+    if report and report not in dict(REPORT_TYPES):raise HTTPException(400,f'Unknown report type {report!r}.')
+    provinces,districts,facilities=_ids(province),_ids(district),_ids(facility)
+    types=[t.upper() for t in _ids(type)]
     def load(c):
         geo={'provinces':{p['province_id']:p['province_name'] for p in _query(c,'SELECT * FROM registry.province')},
              'districts':{d['district_id']:d for d in _query(c,'SELECT * FROM registry.district')},
              'types':{t['type_code']:t for t in _query(c,'SELECT * FROM registry.facility_type')}}
-        return geo,_registry(c,facility,province,district,type),_facility(c)
+        return geo,_registry(c,facilities,provinces,districts,types),_facility(c)
     geo,scope_rows,site=_with_registry(load)
-    if province and province not in geo['provinces']:raise HTTPException(404,f'Unknown province {province!r}.')
-    if district and district not in geo['districts']:raise HTTPException(404,f'Unknown district {district!r}.')
-    if district and province and geo['districts'][district]['province_id']!=province:raise HTTPException(400,'That district is not in the selected province.')
-    if facility and not scope_rows:raise HTTPException(404,f'Facility {facility!r} is not in this selection.')
-    if type and type.upper()!='HOSPITAL' and type.upper() not in geo['types']:raise HTTPException(404,f'Unknown facility type {type!r}.')
+    for p in provinces:
+        if p not in geo['provinces']:raise HTTPException(404,f'Unknown province {p!r}.')
+    for d in districts:
+        if d not in geo['districts']:raise HTTPException(404,f'Unknown district {d!r}.')
+    if provinces and any(geo['districts'][d]['province_id'] not in provinces for d in districts):
+        raise HTTPException(400,'A selected district is not in the selected provinces.')
+    if facilities and not scope_rows:raise HTTPException(404,'The selected facilities are not in this selection.')
+    for t in types:
+        if t!='HOSPITAL' and t not in geo['types']:raise HTTPException(404,f'Unknown facility type {t!r}.')
+    # The map and breakdowns work on one level: one district, one province, or the whole country.
+    # Several facilities: their own districts and provinces decide the level.
+    if len(facilities)>1:dset={r['districtId'] for r in scope_rows};pset={r['provinceId'] for r in scope_rows}
+    else:
+        dset=set(districts)
+        pset={geo['districts'][d]['province_id'] for d in districts} if districts else set(provinces)
+    province=next(iter(pset)) if len(pset)==1 else None
+    district=next(iter(dset)) if len(dset)==1 else None
+    facility=facilities[0] if len(facilities)==1 else None
+    def names(items):
+        items=sorted(items)
+        return ', '.join(items) if len(items)<=3 else f"{', '.join(items[:2])} and {len(items)-2} more"
 
     latest=site['latestDate'] or date.today()
     to_date=to_date or latest
@@ -1603,9 +1663,11 @@ def national_dashboard(from_date: date | None=Query(None,alias='from'),to_date: 
         f=scope_rows[0];parts+=[x for x in (f['province'],f['district'],f['name']) if x]
     else:
         if province:parts.append(geo['provinces'][province])
+        elif len(pset)>1:parts.append(names(geo['provinces'][p] for p in pset if p in geo['provinces']))
         if district:parts.append(geo['districts'][district]['district_name'])
-    type_label=None
-    if type:type_label='Hospitals (all levels)' if type.upper()=='HOSPITAL' else geo['types'][type.upper()]['type_label']
+        elif len(dset)>1:parts.append(names(geo['districts'][d]['district_name'] for d in dset if d in geo['districts']))
+        if len(facilities)>1:parts.append(f'{len(scope_rows)} selected facilities')
+    type_label=', '.join('Hospitals (all levels)' if t=='HOSPITAL' else geo['types'][t]['type_label'] for t in types) or None
     by_type={}
     for t in sorted(geo['types'].values(),key=lambda t:t['sort_order']):
         by_type[t['type_code']]={'code':t['type_code'],'label':t['type_label'],'group':t['type_group'],'facilities':0,'reporting':0}
@@ -1637,7 +1699,9 @@ def national_dashboard(from_date: date | None=Query(None,alias='from'),to_date: 
              'values':{k:(sum(per_facility.get(f,{}).get(k,0) for f in a['reporting']) if a['reporting'] else None) for k in keys}}
             for a in sorted(areas.values(),key=lambda a:a['name'])]}
     return {
-      'scope':{'level':level,'path':parts,'label':' › '.join(parts),'province':province,'district':district,'type':type,'typeLabel':type_label,'facility':facility},
+      'scope':{'level':level,'path':parts,'label':' › '.join(parts),'province':province,'district':district,
+               'type':','.join(types) or None,'typeLabel':type_label,'facility':facility,
+               'provinces':provinces,'districts':districts,'types':types,'facilities':facilities},
       'period':{'from':from_date,'to':to_date,'latestDataDate':latest,
                 'partialLastMonth':to_date==latest and (to_date.replace(day=28)+timedelta(days=4)).replace(day=1)-timedelta(days=1)!=to_date},
       'coverage':{'facilities':len(scope_rows),'hospitals':sum(r['typeGroup']=='Hospital' for r in scope_rows),
@@ -1645,12 +1709,13 @@ def national_dashboard(from_date: date | None=Query(None,alias='from'),to_date: 
                   'withCoordinates':sum(r['latitude'] is not None for r in scope_rows),
                   'byType':list(by_type.values()),
                   'byProvince':_breakdown(scope_rows,'provinceId','province'),
-                  'byDistrict':_breakdown(scope_rows,'districtId','district') if province or district else None},
+                  'byDistrict':_breakdown(scope_rows,'districtId','district') if pset or dset else None},
       'facilities':[{k:r[k] for k in ('id','name','province','district','districtId','type','typeLabel','typeGroup','latitude','longitude','hasData')} for r in scope_rows],
       'reportingFacilities':[{'id':r['id'],'name':r['name'],'province':r['province'],'district':r['district'],'typeLabel':r['typeLabel']} for r in reporting],
       # Single-tenant database: the loaded data belongs to the reporting facilities, so indicators are
       # computed only when at least one of them is in scope. Multi-tenant: filter by their IDs instead.
       'indicators':indicators,
+      'reportingRate':_reporting_rate(scope_rows,indicators,report),
       'byArea':by_area,
       # Indicator totals per reporting facility in scope (the map can shade by facility or by map district).
       'byFacility':[{'id':r['id'],'values':per_facility.get(r['id'],{})} for r in reporting],

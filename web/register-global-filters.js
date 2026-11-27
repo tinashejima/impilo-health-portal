@@ -38,7 +38,7 @@
     ensureBanner();
     var r = latest.resolved, f = latest.filters;
     var scope = document.getElementById('impiloScope'), empty = document.getElementById('impiloEmpty');
-    if (scope) scope.innerHTML = '<span>Showing <b>' + esc(r.label) + '</b>' + (r.typeLabel ? ' · ' + esc(r.typeLabel) : '') + ' · <b>' + day(r.from) + ' – ' + day(r.to) + '</b></span>' +
+    if (scope) scope.innerHTML = '<span>Showing <b>' + esc(r.label) + '</b>' + (r.typeLabel ? ' · ' + esc(r.typeLabel) : '') + ' · ' + (r.periodLabel ? esc(r.periodLabel) + ': ' : '') + '<b>' + (r.from === r.to ? day(r.from) : day(r.from) + ' – ' + day(r.to)) + '</b></span>' +
       '<span>Change the selection in the filter bar at the top of the portal.</span>';
     if (!r.reportingIds.length) {
       document.body.classList.add('impilo-empty');

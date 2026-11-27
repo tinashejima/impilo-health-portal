@@ -14,6 +14,7 @@ Endpoints (all under /api/ai):
   GET|PUT /settings                generation settings ("Optimise"); GET /settings/recommend
   GET|PUT|DELETE /assistants[/{id}], POST /assistants/{id}/build   ("Train": custom Ollama models)
   POST /chat                       streamed answer (NDJSON), optionally grounded in portal data
+  POST /chat/cancel {requestId}    stop an answer that is still being written (frees the model)
 """
 import json
 import os
@@ -575,6 +576,31 @@ class ChatRequest(BaseModel):
     history: list[ChatMessage] = []
     assistantId: str | None = None
     filters: dict = {}
+    requestId: str | None = Field(default=None, max_length=64)
+
+
+class CancelRequest(BaseModel):
+    requestId: str = Field(min_length=1, max_length=64)
+
+
+# Answers being written, by the browser's requestId. Stopping closes the connection to Ollama, which makes
+# Ollama stop generating at once (just dropping the browser connection leaves the model running).
+_active = {}  # requestId -> {'cancelled': threading.Event, 'response': httpx.Response | None}
+_active_lock = threading.Lock()
+
+
+@router.post('/chat/cancel')
+def cancel_chat(req: CancelRequest):
+    with _active_lock:
+        job = _active.get(req.requestId)
+    if not job:
+        return {'cancelled': False}
+    job['cancelled'].set()
+    r = job.get('response')
+    if r is not None:
+        try: r.close()
+        except Exception: pass
+    return {'cancelled': True}
 
 
 def _chart_for(req):
@@ -592,6 +618,12 @@ def _chart_for(req):
 
 @router.post('/chat')
 def chat(req: ChatRequest):
+    rid = req.requestId or uuid.uuid4().hex
+    job = {'cancelled': threading.Event(), 'response': None, 'started': time.time()}
+    with _active_lock:
+        for k in [k for k, v in _active.items() if time.time() - v['started'] > 900]:
+            _active.pop(k, None)  # requests the browser left before the answer began
+        _active[rid] = job
     chart, figures = _chart_for(req)
     up = _ollama_up()
     s = settings()
@@ -627,6 +659,13 @@ def chat(req: ChatRequest):
         opts['num_ctx'] = 4096
 
     def stream():
+        try:
+            yield from _stream()
+        finally:
+            with _active_lock:
+                _active.pop(rid, None)
+
+    def _stream():
         yield json.dumps({'type': 'meta', 'assistant': a['name'], 'grounded': bool(context or chart)}) + '\n'
         if chart:
             yield json.dumps({'type': 'chart', 'chart': chart}, default=str) + '\n'
@@ -635,8 +674,13 @@ def chat(req: ChatRequest):
         body = {'model': model, 'messages': messages, 'stream': True, 'options': opts, 'keep_alive': s['keep_alive'], 'think': False}
         for attempt in (1, 2):
             sent, thinking, buf = False, False, ''
+            if job['cancelled'].is_set():
+                return
             try:
                 with httpx.stream('POST', OLLAMA + '/api/chat', json=body, timeout=httpx.Timeout(30, read=600)) as r:
+                    job['response'] = r
+                    if job['cancelled'].is_set():
+                        return
                     if r.status_code >= 400:
                         r.read()
                         err = r.json().get('error', r.text) if r.content else str(r.status_code)
@@ -645,6 +689,8 @@ def chat(req: ChatRequest):
                         yield json.dumps({'type': 'error', 'message': 'The assistant could not answer right now. Please try again, or ask an administrator to check the AI configuration.'}) + '\n'
                         return
                     for line in r.iter_lines():
+                        if job['cancelled'].is_set():
+                            return
                         if not line:
                             continue
                         msg = json.loads(line)
@@ -676,7 +722,9 @@ def chat(req: ChatRequest):
                                 return
                             yield json.dumps({'type': 'done'}) + '\n'
                 return
-            except httpx.HTTPError:
+            except Exception:
+                if job['cancelled'].is_set():
+                    return  # stopped by the person: closing the connection lands here
                 yield json.dumps({'type': 'error', 'message': 'The assistant is not reachable right now. Please try again shortly.'}) + '\n'
                 return
 

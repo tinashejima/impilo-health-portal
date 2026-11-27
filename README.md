@@ -52,14 +52,36 @@ reporting facilities in scope.
 
 The Overview tab shows `web\facility-dashboard.html`. Its source is `web-src\facility-dashboard.template.html`
 plus `web-src\provinces.geoboundaries.json` (province outlines, geoBoundaries CC BY 4.0).
+After editing the template, rebuild the page with `python web-src\build_dashboard.py`.
+
+**Reporting rate** (Overview): Reporting rate (%) = facilities reported ÷ facilities expected × 100, for the selected
+period, province, district, facility type, facility and report type (Attendance, OPD General, HTS, ANC, ART, TB,
+Malaria, Delivery, or all). Every registered facility in the selection is expected once; it has reported when the
+warehouse holds at least one record of that report type dated in the period (for "all", any report type). Each
+facility counts once however many records it has. API: `GET /api/dashboard?...&report=hts` → `reportingRate`.
 
 ## Portal-wide filters
 
-One filter bar (Province, District, Facility type, Facility, Period) sits at the top of the portal
+One filter bar (Province, District, Facility type, Facility, Reporting period) sits at the top of the portal
 (`web\global-filters.js`) and applies to every section that shows live data: Overview and all registers.
 It is remembered across sections and visits. Embedded pages hide their own filters and follow it:
 the Overview via `facility-dashboard.html`, registers via `web\register-global-filters.js`.
-Opened on their own (outside the portal), pages keep their own filter controls.
+The Overview opened on its own mounts the same bar; registers opened on their own keep their own controls.
+
+**Multiple selection.** Province, District, Facility type and Facility are checkbox lists with search, an
+"All …" row, Select All, Clear All and an "n of N selected" count. Ticks apply when the list closes (Apply,
+Enter, or clicking away); Esc discards them. Nothing ticked, or everything ticked, means all. The lists cascade:
+districts come from the chosen provinces, facilities from the chosen provinces, districts and types. The API
+takes several IDs comma-separated (`/api/dashboard?province=ZW09,ZW04&type=CLINIC`), and access checks keep
+every listed ID inside the user's area. Older pages still receive single `province`/`district`/`facility`
+values (set when exactly one is chosen), so the Geospatial map follows one province.
+
+**Reporting periods.** Today, Yesterday, This week, Last week (Monday–Sunday), Bi-weekly (two weeks from a
+chosen week, default last week + this week), This month, Last month, Monthly (pick month), Quarterly (Q1 Jan–Mar …
+Q4 Oct–Dec, pick quarter and year), Bi-yearly (H1 Jan–Jun / H2 Jul–Dec), Yearly, Custom period, and
+"Last 1/3/6/12 months of data" (ending on the newest record; the default). Calendar periods count from today,
+so they are empty until data for those dates reaches the warehouse; the bar says when a period starts after
+the newest record.
 
 ## Map shading
 

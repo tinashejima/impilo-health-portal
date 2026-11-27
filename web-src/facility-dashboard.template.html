@@ -143,42 +143,21 @@ dl.facts dd{margin:0;font-weight:600}
 .embedded .toolbar{display:none}
 .status.error{color:var(--rose)}
 .foot{font-size:11.5px;color:var(--muted);padding:2px 4px 6px;line-height:1.5}
+.rr .rr-tiles{margin-top:14px}
+.rr .kpi{background:#fbfcfe}
+.rr .kpi.main{background:#ecf7ee;border-color:var(--green-light)}
+.rbar{display:block;height:6px;border-radius:3px;background:var(--grid);margin:7px 0 5px;overflow:hidden}
+.rbar i{display:block;height:100%;background:var(--green);border-radius:3px}
+.rr table.data tr.on td{background:#ecf7ee}
+.rr table.data td.rate{min-width:120px}
+.rr table.data td.rate .rbar{display:inline-block;width:60px;margin:0 0 0 8px;vertical-align:middle}
 @media(max-width:1100px){.tiles{grid-template-columns:repeat(3,1fr)}.tiles.k8{grid-template-columns:repeat(2,1fr)}.grid2,.grid3,.mapgrid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="card toolbar" role="group" aria-label="Dashboard filters">
-    <div><label for="province">Province</label><select id="province"><option value="">All provinces</option></select></div>
-    <div><label for="district">District</label><select id="district" disabled><option value="">All districts</option></select></div>
-    <div><label for="ftype">Facility type</label>
-      <select id="ftype">
-        <option value="">All facility types</option>
-        <option value="CLINIC">Clinics</option>
-        <optgroup label="Hospitals">
-          <option value="HOSPITAL">All hospitals</option>
-          <option value="RURAL_HOSPITAL">Rural hospitals</option>
-          <option value="DISTRICT_HOSPITAL">District hospitals</option>
-          <option value="PROVINCIAL_HOSPITAL">Provincial hospitals</option>
-          <option value="CENTRAL_HOSPITAL">Central hospitals</option>
-          <option value="OTHER_HOSPITAL">Other hospitals</option>
-        </optgroup>
-      </select></div>
-    <div><label for="facility">Facility</label><select id="facility"><option value="">All facilities</option></select></div>
-    <div><label for="period">Period</label>
-      <select id="period">
-        <option value="12">Last 12 months of data</option>
-        <option value="6">Last 6 months of data</option>
-        <option value="3">Last 3 months of data</option>
-        <option value="custom">Custom dates</option>
-      </select></div>
-    <div id="customDates" style="display:none;gap:10px">
-      <div><label for="from">From</label><input type="date" id="from"></div>
-      <div><label for="to">To</label><input type="date" id="to"></div>
-      <div style="align-self:end"><button class="btn" id="apply" type="button">Apply</button></div>
-    </div>
-    <div style="margin-left:auto;align-self:center"><button class="btn ghost" id="reset" type="button">Reset to national</button></div>
-  </div>
+  <!-- Opened on its own (outside the portal), the portal's filter bar is mounted here (global-filters.js). -->
+  <div id="impilo-global-filters" data-standalone="1"></div>
   <div id="content"><div class="card status">Loading national dashboard…</div></div>
 </div>
 <div id="tip" role="tooltip"></div>
@@ -204,6 +183,9 @@ const MAP_INDICATORS=[['','Facilities only'],['opd','OPD General visits'],['atte
 // Sequential ramp: one hue, light to dark (higher value = darker).
 const RAMP=['#e4f2e7','#b7dcbf','#7cc08e','#3d9a57','#1b6b31'];
 let shadeBy='province';try{const v=localStorage.getItem('impilo.mapShadeBy');if(['province','district','facility'].includes(v))shadeBy=v}catch{}
+// Reporting rate: report type shown (''= all report types) and whether the by-type table is open.
+let reportType='';try{const v=localStorage.getItem('impilo.reportType');if(v&&/^[a-z-]+$/.test(v))reportType=v}catch{}
+let rrTableOpen=false;
 let mapIndicator='opd';try{const v=localStorage.getItem('impilo.mapIndicator');if(v!==null&&MAP_INDICATORS.some(m=>m[0]===v))mapIndicator=v}catch{}
 const indLabel=k=>(MAP_INDICATORS.find(m=>m[0]===k)||[])[1]||'';
 const rampStep=(v,max)=>v==null?null:max>0?Math.min(4,Math.floor(v/max*5-1e-9<0?0:v/max*5-1e-9)):0;
@@ -223,31 +205,14 @@ function hideTip(){tip.style.display='none'}
 function bindTips(root){root.querySelectorAll('[data-tip]').forEach(el=>{el.addEventListener('mousemove',e=>showTip(e,el.dataset.tip));el.addEventListener('mouseleave',hideTip)})}
 
 // ---------------------------------------------------------------- filters
-function state(){return{province:$('province').value,district:$('district').value,type:$('ftype').value,facility:$('facility').value,period:$('period').value}}
-function fillDistricts(){
-  const p=geo.provinces.find(p=>p.id===$('province').value);
-  $('district').innerHTML='<option value="">All districts</option>'+(p?p.districts.map(d=>`<option value="${esc(d.id)}">${esc(d.name)}</option>`).join(''):'');
-  $('district').disabled=!p;
-}
-async function fillFacilities(keep){
-  const s=state(),q=new URLSearchParams();
-  if(s.province)q.set('province',s.province);if(s.district)q.set('district',s.district);if(s.type)q.set('type',s.type);
-  try{
-    const r=await fetch(`${API}/facilities?${q}`,{cache:'no-store'});const body=await r.json();
-    const list=body.data.slice().sort((a,b)=>(b.hasData-a.hasData)||a.name.localeCompare(b.name));
-    $('facility').innerHTML=`<option value="">All facilities (${fmt(body.total)})</option>`+list.map(f=>`<option value="${esc(f.id)}">${esc(f.name)}${f.hasData?' · reporting':''}</option>`).join('');
-    if(keep&&list.some(f=>f.id===keep))$('facility').value=keep;
-  }catch{$('facility').innerHTML='<option value="">Facility list unavailable</option>'}
-}
-async function select(change){
-  if(EMBEDDED){parent.postMessage({type:'impilo-set-filters',patch:change},'*');return}
-  // change: {province, district, type, facility} - applied in hierarchy order, children reset.
-  if('province' in change){$('province').value=change.province||'';fillDistricts();$('district').value='';if(!('facility' in change))$('facility').value=''}
-  if('district' in change){$('district').value=change.district||'';if(!('facility' in change))$('facility').value=''}
-  if('type' in change){$('ftype').value=change.type||'';if(!('facility' in change))$('facility').value=''}
-  await fillFacilities(change.facility);
-  if('facility' in change)$('facility').value=change.facility||'';
-  load();
+// Provinces, districts, facility types and facilities each hold several IDs ([] = all).
+function state(){const f=globalFilters?.filters||{},list=k=>Array.isArray(f[k])?f[k]:[];
+  return{province:list('provinces'),district:list('districts'),type:list('types'),facility:list('facilities')}}
+// Drill-down clicks (a province, district, facility or breadcrumb) change the shared filters.
+// change: {province, district, type, facility}, one ID each ('' = all); levels below are reset.
+function select(change){
+  if(EMBEDDED)parent.postMessage({type:'impilo-set-filters',patch:change},'*');
+  else window.ImpiloFilters?.set(change);
 }
 
 // ---------------------------------------------------------------- charts
@@ -469,6 +434,28 @@ function rankingCard(d){
     <div class="panel-h">By age group and sex</div>${pyramid}
     ${notes?`<div class="muted-list" style="margin-top:8px">${esc(notes)}</div>`:''}</div>`;
 }
+// Reporting rate = facilities that reported ÷ facilities expected to report × 100, for the selected
+// period, area, facility type, facility and report type. The API counts each facility once.
+const rateTxt=r=>r==null?'—':(+Number(r).toFixed(1))+'%';
+const rateBar=r=>`<span class="rbar" aria-hidden="true"><i style="width:${Math.max(0,Math.min(100,r||0))}%"></i></span>`;
+function reportingCard(d){
+  const rr=d.reportingRate,p=d.period;if(!rr)return '';
+  const what=rr.report?`${esc(rr.reportLabel)} reports`:'at least one report';
+  const one=d.scope.level==='facility';
+  return `<div class="card rr"><div class="maphead"><div><h2>Reporting rate</h2><div class="sub">${one?'Whether this facility':'Facilities that'} submitted ${what} between ${dayLabel(p.from)} and ${dayLabel(p.to)} · each facility is counted once</div></div>
+    <div class="mapctl"><div><label for="reportType">Report type</label><select id="reportType"><option value="">All report types</option>${rr.reportTypes.map(t=>`<option value="${esc(t.id)}"${t.id===rr.report?' selected':''}>${esc(t.name)}</option>`).join('')}</select></div></div></div>
+    <div class="tiles k8 rr-tiles">
+      ${kpi('Facilities expected to report',fmt(rr.expected),'Registered facilities in this selection')}
+      ${kpi('Facilities reported',fmt(rr.reported),`Submitted ${what} in the period`)}
+      ${kpi('Facilities not reported',fmt(rr.notReported),rr.expected?(rr.notReported?'No report received in the period':'Every expected facility reported'):'No facilities in this selection')}
+      ${kpi('Reporting rate',rateTxt(rr.rate),`${rateBar(rr.rate)}${fmt(rr.reported)} reported ÷ ${fmt(rr.expected)} expected × 100`).replace('class="kpi"','class="kpi main"')}
+    </div>
+    <details class="table" id="rrTable"${rrTableOpen?' open':''}><summary>Reporting rate by report type</summary>
+      <table class="data"><thead><tr><th>Report type</th><th>Expected</th><th>Reported</th><th>Not reported</th><th>Reporting rate</th></tr></thead><tbody>
+      ${rr.byReport.map(b=>`<tr class="click${b.id===rr.report?' on':''}" data-report="${esc(b.id)}" title="${b.id===rr.report?'Show all report types':'Show '+esc(b.name)+' only'}"><td class="name">${esc(b.name)}</td><td>${fmt(b.expected)}</td><td>${fmt(b.reported)}</td><td>${fmt(b.notReported)}</td><td class="rate">${rateTxt(b.rate)}${rateBar(b.rate)}</td></tr>`).join('')}
+      </tbody></table></details></div>`;
+}
+function setReportType(v){reportType=v;try{localStorage.setItem('impilo.reportType',v)}catch{};load()}
 // Below the map: the selected indicator month by month.
 function trendCard(d){
   const ind=mapIndicator;if(!ind)return '';
@@ -478,13 +465,13 @@ function trendCard(d){
 }
 function render(d){
   current=d;
-  if(d.scope.level==='facility'&&d.facility&&$('province').value!==(d.facility.provinceId||'')){$('province').value=d.facility.provinceId||'';fillDistricts();$('district').value=d.facility.districtId||''}const s=d.scope,c=d.coverage,p=d.period;
+  const s=d.scope,c=d.coverage,p=d.period;
   const crumbs=[['Zimbabwe',{province:'',type:s.type||''}]];
   if(s.level==='facility'&&d.facility){const f=d.facility;crumbs.push([f.province,{province:f.provinceId||''}]);if(f.districtId)crumbs.push([f.district,{province:f.provinceId||'',district:f.districtId}]);crumbs.push([f.name,null])}
   else{if(s.province)crumbs.push([s.path[1],s.district?{province:s.province}:null]);if(s.district)crumbs.push([s.path[2],null])}
   crumbs[crumbs.length-1][1]=null;
   const crumbHtml=crumbs.map(([n,t],i)=>(i?'<span class="sep">›</span>':'')+(t?`<button type="button" data-crumb='${esc(JSON.stringify(t))}'>${esc(n)}</button>`:`<span class="here">${esc(n)}</span>`)).join('');
-  const title=s.level==='national'?'Zimbabwe — national overview':s.path[s.path.length-1]+(s.level==='province'?' Province':'');
+  const title=s.level==='national'?(s.path.length>1?s.path.slice(1).join(' · '):'Zimbabwe — national overview'):s.path[s.path.length-1]+(s.level==='province'&&!(s.districts||[]).length&&!(s.facilities||[]).length?' Province':'');
   const hospitalsDetail=c.byType.filter(t=>t.group==='Hospital'&&t.facilities).map(t=>`${fmt(t.facilities)} ${t.label.replace(' hospital','').toLowerCase()}`).join(' · ');
   const reportingNames=d.reportingFacilities.map(f=>`<span class="pill on">${esc(f.name)} · ${esc(f.district)}</span>`).join('');
   $('content').innerHTML=`<div class="wrap">
@@ -492,13 +479,14 @@ function render(d){
       <div class="sub">${s.typeLabel?esc(s.typeLabel)+' · ':''}${dayLabel(p.from)} – ${dayLabel(p.to)}${p.partialLastMonth?` · ${monthLabel(p.to.slice(0,7),true)} is partial (data ends ${dayLabel(p.latestDataDate)})`:''}</div></div>
 </div>
     ${s.level==='facility'&&d.facility?facilityCard(d.facility,p):''}
-    ${s.level!=='facility'?`<div class="tiles">
-      ${kpi('Facilities in selection',fmt(c.facilities),s.level==='national'?`${geo.provinces.length} provinces · ${fmt(geo.provinces.reduce((a,p)=>a+p.districts.length,0))} districts`:'')}
+    ${s.level==='facility'?reportingCard(d):''}
+    ${s.level!=='facility'?`<div class="tiles k8">
+      ${kpi('Facilities in selection',fmt(c.facilities),s.level==='national'?(()=>{const np=new Set(d.facilities.map(f=>f.province)).size,nd=new Set(d.facilities.map(f=>f.districtId)).size;return `${np} province${np===1?'':'s'} · ${fmt(nd)} district${nd===1?'':'s'}`})():'')}
       ${kpi('Hospitals',fmt(c.hospitals),hospitalsDetail||'None in this selection')}
       ${kpi('Clinics',fmt(c.clinics),'Clinics, polyclinics and health centres')}
-      ${kpi('Reporting to the warehouse',`${fmt(c.reporting)}<span style="font-size:15px;color:var(--muted)"> of ${fmt(c.facilities)}</span>`,`${pct(c.reporting,c.facilities)} of facilities connected`)}
       ${kpi('With map location',fmt(c.withCoordinates),`${pct(c.withCoordinates,c.facilities)} have coordinates`)}
     </div>
+    ${reportingCard(d)}
     <div class="mapgrid">
       <div class="card"><div class="maphead"><div><h2>${mapIndicator?esc(indLabel(mapIndicator))+' by '+shadeBy:'Facility map'}</h2><div class="sub">${s.level==='national'?'Click a province to zoom in · hover for figures':'Hover for figures · click a facility to open it'}</div></div>
         <div class="mapctl"><div><label for="mapIndicator">Show on map</label><select id="mapIndicator">${MAP_INDICATORS.map(([v,l])=>`<option value="${v}"${v===mapIndicator?' selected':''}>${esc(l)}</option>`).join('')}</select></div>
@@ -509,6 +497,7 @@ function render(d){
     ${activity(d)}
     ${s.level!=='facility'&&(s.level!=='national'||s.type)?facilityList(d.facilities):''}
     <div class="foot">Facility list: national facility registry (${fmt(geo.totalFacilities)} facilities). Facility types are derived from facility names, codes and the list of central and provincial hospitals until the official MoHCC classification is loaded.
+      Reporting rate: every registered facility in the selection is expected to report once for the period; a facility has reported when the warehouse holds at least one record of the report type dated in the period.
       Activity: reporting tables of facilities connected to the warehouse, using the same rules as the registers, so totals match the register pages for the same dates.</div>
   </div>`;
   const root=$('content');bindTips(root);
@@ -533,11 +522,14 @@ function render(d){
     el.addEventListener('mouseenter',()=>highlight(el.dataset.region,true));
     el.addEventListener('mouseleave',()=>highlight(null,false));
   });
+  $('reportType')?.addEventListener('change',e=>setReportType(e.target.value));
+  root.querySelectorAll('tr[data-report]').forEach(el=>el.addEventListener('click',()=>setReportType(el.dataset.report===reportType?'':el.dataset.report)));
+  $('rrTable')?.addEventListener('toggle',e=>{rrTableOpen=e.target.open;postHeight()});
   $('mapIndicator')?.addEventListener('change',e=>{mapIndicator=e.target.value;try{localStorage.setItem('impilo.mapIndicator',mapIndicator)}catch{};render(current)});
   root.querySelectorAll('[data-shade]').forEach(b=>b.addEventListener('click',()=>{shadeBy=b.dataset.shade;try{localStorage.setItem('impilo.mapShadeBy',shadeBy)}catch{};render(current)}));
   root.querySelectorAll('path.dist[data-dprov]').forEach(el=>el.addEventListener('click',()=>{if(el.dataset.dprov&&current.scope.level==='national')select({province:el.dataset.dprov})}));
   root.querySelectorAll('[data-province]').forEach(el=>el.addEventListener('click',()=>{const name=el.dataset.province;const id=el.tagName==='TR'?el.dataset.province:geo.provinces.find(p=>p.name===name)?.id;if(id)select({province:id})}));
-  root.querySelectorAll('tr[data-district]').forEach(el=>el.addEventListener('click',()=>{if(el.dataset.district)select({province:$('province').value||current.facilities.find(f=>f.districtId===el.dataset.district)?.provinceId||'',district:el.dataset.district})}));
+  root.querySelectorAll('tr[data-district]').forEach(el=>el.addEventListener('click',()=>{if(el.dataset.district)select({province:current.scope.province||current.facilities.find(f=>f.districtId===el.dataset.district)?.provinceId||'',district:el.dataset.district})}));
   root.querySelectorAll('[data-facility]').forEach(el=>el.addEventListener('click',()=>{const f=current.facilities.find(x=>x.id===el.dataset.facility)||geo.dataFacilities.find(x=>x.id===el.dataset.facility);openFacility(el.dataset.facility,f)}));
   root.querySelectorAll('[data-pick]').forEach(el=>el.addEventListener('click',()=>select(JSON.parse(el.dataset.pick))));
   root.querySelectorAll('[data-crumb]').forEach(el=>el.addEventListener('click',()=>{const t=JSON.parse(el.dataset.crumb);select({province:t.province||'',district:t.district||'',facility:''})}));
@@ -552,48 +544,40 @@ function monthsBack(dateStr,n){let y=+dateStr.slice(0,4),m=+dateStr.slice(5,7)-(
 async function load(){
   const seq=++requestSeq; // only the newest request may draw, so a slow older one can't overwrite it
   const s=state(),q=new URLSearchParams();
-  for(const k of ['province','district','type','facility'])if(s[k])q.set(k,s[k]);
-  if(EMBEDDED&&globalFilters?.resolved){q.set('from',globalFilters.resolved.from);q.set('to',globalFilters.resolved.to)}
-  else if(s.period==='custom'){if($('from').value)q.set('from',$('from').value);if($('to').value)q.set('to',$('to').value)}
-  else if(latestDate){q.set('from',monthsBack(latestDate,+s.period));q.set('to',latestDate)}
+  for(const k of ['province','district','type','facility'])if(s[k].length)q.set(k,s[k].join(','));
+  if(reportType)q.set('report',reportType);
+  const r0=globalFilters?.resolved;
+  if(r0){q.set('from',r0.from);q.set('to',r0.to)}
+  else if(latestDate){q.set('from',monthsBack(latestDate,12));q.set('to',latestDate)}
   $('content').style.opacity=.5;
   try{
     const r=await fetch(`${API}/dashboard?${q}`,{cache:'no-store'});const body=await r.json().catch(()=>({}));
     if(seq!==requestSeq)return;
+    if(!r.ok&&reportType&&/report type/i.test(body.detail||'')){reportType='';try{localStorage.removeItem('impilo.reportType')}catch{};return load()}
     if(!r.ok)throw Error(body.detail||`The API returned ${r.status}`);
     latestDate=body.period.latestDataDate;render(body);
   }catch(e){if(seq!==requestSeq)return;$('content').innerHTML=`<div class="card status error">Could not load the dashboard: ${esc(e.message)}<br><small>Check that the API is running (start.cmd) at ${API}.</small></div>`;postHeight()}
   if(seq===requestSeq)$('content').style.opacity=1;
 }
-async function applyGlobal(){
-  const f=globalFilters.filters;
-  $('province').value=f.province||'';fillDistricts();$('district').value=f.district||'';$('ftype').value=f.type||'';
-  await fillFacilities(f.facility);$('facility').value=f.facility||'';
-  load();
-}
+function applyGlobal(){load()}
 window.addEventListener('message',e=>{
   if(e.source!==window.parent||!e.data||e.data.type!=='impilo-filters')return;
   globalFilters=e.data;if(geoReady)applyGlobal();
 });
+// Opened on its own: the filter bar on this page sends the same message as a window event.
+window.addEventListener('impilo-filters',e=>{if(EMBEDDED)return;globalFilters=e.detail;if(geoReady)applyGlobal()});
+if(!EMBEDDED){const sc=document.createElement('script');sc.src='./global-filters.js?v=17';document.head.appendChild(sc)}
 async function init(){
   try{
     const [g,f]=await Promise.all([fetch(`${API}/geography`,{cache:'no-store'}),fetch(`${API}/facilities`,{cache:'no-store'})]);
     if(!g.ok||!f.ok)throw Error('The facility registry is not available. Run update.cmd, then reload.');
     geo=await g.json();const all=await f.json();
     geo.totalFacilities=all.total;geo.dataFacilities=all.data.filter(x=>x.hasData);
-    $('province').innerHTML='<option value="">All provinces</option>'+geo.provinces.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
     geoReady=true;
-    if(EMBEDDED){if(globalFilters)applyGlobal();else{parent.postMessage({type:'impilo-filters-request'},'*');$('content').innerHTML='<div class="card status">Waiting for the portal filters…</div>'}return}
-    await fillFacilities();load();
+    if(globalFilters)applyGlobal();
+    else{if(EMBEDDED)parent.postMessage({type:'impilo-filters-request'},'*');$('content').innerHTML='<div class="card status">Waiting for the filters…</div>'}
   }catch(e){$('content').innerHTML=`<div class="card status error">${esc(e.message)}</div>`;postHeight()}
 }
-$('province').addEventListener('change',()=>select({province:$('province').value}));
-$('district').addEventListener('change',()=>select({district:$('district').value}));
-$('ftype').addEventListener('change',()=>select({type:$('ftype').value}));
-$('facility').addEventListener('change',()=>{const id=$('facility').value;if(!id){load();return}const f=current?.facilities.find(x=>x.id===id);openFacility(id,f)});
-$('period').addEventListener('change',()=>{const custom=$('period').value==='custom';$('customDates').style.display=custom?'flex':'none';if(!custom)load()});
-$('apply').addEventListener('click',load);
-$('reset').addEventListener('click',()=>{$('ftype').value='';$('period').value='12';$('customDates').style.display='none';select({province:'',type:''})});
 init();
 </script>
 </body>

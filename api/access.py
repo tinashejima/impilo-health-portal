@@ -141,22 +141,24 @@ def scope_query(request, perm):
     from urllib.parse import parse_qsl, urlencode
     q = dict(parse_qsl(request.scope.get('query_string', b'').decode(), keep_blank_values=True))
     reg = _registry()
-    prov, dist, fac = q.get('province') or None, q.get('district') or None, q.get('facility') or None
+    # Each filter may list several IDs (comma-separated); every one must be inside the area.
+    ids = lambda k: [x.strip() for x in (q.get(k) or '').split(',') if x.strip()]
+    provs, dists, facs = ids('province'), ids('district'), ids('facility')
     if a['level'] == 'province':
-        if fac and reg.get(fac, (None,))[0] not in a['areas']: return deny('That facility is outside your area.')
-        if prov and prov not in a['areas']: return deny('That province is outside your area.')
-        if dist and not any(d == dist and p in a['areas'] for p, d in reg.values()): return deny('That district is outside your area.')
-        if not prov and not dist and not fac: q['province'] = a['areas'][0]
+        if any(reg.get(f, (None,))[0] not in a['areas'] for f in facs): return deny('That facility is outside your area.')
+        if any(p not in a['areas'] for p in provs): return deny('That province is outside your area.')
+        if any(not any(d == dist and p in a['areas'] for p, d in reg.values()) for dist in dists): return deny('That district is outside your area.')
+        if not provs and not dists and not facs: q['province'] = ','.join(a['areas'])
     elif a['level'] == 'district':
-        if fac and reg.get(fac, (None, None))[1] not in a['areas']: return deny('That facility is outside your area.')
-        if dist and dist not in a['areas']: return deny('That district is outside your area.')
-        if not dist and not fac:
-            q['district'] = a['areas'][0]
-            q['province'] = next((p for p, d in reg.values() if d == a['areas'][0]), prov or '')
+        if any(reg.get(f, (None, None))[1] not in a['areas'] for f in facs): return deny('That facility is outside your area.')
+        if any(d not in a['areas'] for d in dists): return deny('That district is outside your area.')
+        if not dists and not facs:
+            q['district'] = ','.join(a['areas'])
+            q.pop('province', None)
     else:
-        if fac and fac not in a['areas']: return deny('That facility is outside your area.')
-        if not fac:
-            q['facility'] = a['areas'][0]
+        if any(f not in a['areas'] for f in facs): return deny('That facility is outside your area.')
+        if not facs:
+            q['facility'] = ','.join(a['areas'])
             q.pop('province', None); q.pop('district', None)
     request.scope['query_string'] = urlencode(q).encode()
     return None
